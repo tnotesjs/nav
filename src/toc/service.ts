@@ -1,14 +1,7 @@
-import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { scanNotes } from './notes'
-import {
-  getTocLineCompleted,
-  parseTocToTree,
-  resolveNoteFromIndex,
-  type TocTreeNode
-} from './tocHelpers'
+import { getWorkspace } from './coreWorkspace'
 import { nodeIdForFolder, nodeIdForNote } from './tocNodeId'
-import type { NoteInfo } from './types'
+import type { KnowledgeBaseSnapshot } from '@tnotesjs/core/workspace'
 
 export type TocNode =
   | {
@@ -30,54 +23,46 @@ export type TocNode =
       children: TocNode[]
     }
 
-function tocPath(repoRoot: string): string {
-  return join(repoRoot, 'TOC.md')
-}
+type SnapshotTocNode = KnowledgeBaseSnapshot['toc'][number]
 
-function toTocNodes(
-  tree: TocTreeNode[],
-  notes: NoteInfo[],
-  folderPath: string[] = []
-): TocNode[] {
-  const result: TocNode[] = []
-  for (const node of tree) {
-    if (node.kind === 'folder') {
-      const path = [...folderPath, node.title]
+function toNavTocNodes(snapshot: KnowledgeBaseSnapshot): TocNode[] {
+  const byIndex = new Map(snapshot.notes.map((note) => [note.index, note]))
+  const build = (nodes: SnapshotTocNode[], folderPath: string[]): TocNode[] => {
+    const result: TocNode[] = []
+    for (const node of nodes) {
+      if (node.kind === 'folder') {
+        const path = [...folderPath, node.title]
+        result.push({
+          type: 'group',
+          title: node.title,
+          tocLineIndex: node.tocLineIndex,
+          nodeId: nodeIdForFolder(path),
+          folderPath: path,
+          children: build(node.children, path)
+        })
+        continue
+      }
+      const note = byIndex.get(node.noteIndex)
+      if (!note) continue
       result.push({
-        type: 'group',
-        title: node.title,
+        type: 'note',
+        title: note.dirName,
+        noteDir: note.dirName,
+        noteIndex: node.noteIndex,
         tocLineIndex: node.tocLineIndex,
-        nodeId: nodeIdForFolder(path),
-        folderPath: path,
-        children: toTocNodes(node.children, notes, path)
+        nodeId: nodeIdForNote(node.noteIndex),
+        completed: note.config.done,
+        children: build(node.children, folderPath)
       })
-      continue
     }
-    const note = resolveNoteFromIndex(node.noteIndex, notes)
-    if (!note) continue
-    result.push({
-      type: 'note',
-      title: note.dirName,
-      noteDir: note.dirName,
-      noteIndex: node.noteIndex,
-      tocLineIndex: node.tocLineIndex,
-      nodeId: nodeIdForNote(node.noteIndex),
-      completed: getTocLineCompleted(note),
-      children: toTocNodes(node.children, notes, folderPath)
-    })
+    return result
   }
-  return result
+  return build(snapshot.toc, [])
 }
 
-export function readToc(repoRoot: string): TocNode[] {
-  const file = tocPath(repoRoot)
-  if (!existsSync(file)) {
-    throw new Error('TOC.md 不存在')
-  }
-  const notes = scanNotes(repoRoot)
-  const lines = readFileSync(file, 'utf-8').split('\n')
-  const tree = parseTocToTree(lines, notes)
-  return toTocNodes(tree, notes)
+export async function readToc(repoRoot: string): Promise<TocNode[]> {
+  const snapshot = await getWorkspace(repoRoot).inspect()
+  return toNavTocNodes(snapshot)
 }
 
 export function noteReadmePath(repoRoot: string, noteDir: string): string {

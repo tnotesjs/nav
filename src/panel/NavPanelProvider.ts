@@ -51,6 +51,8 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
   private gitTimer?: ReturnType<typeof setTimeout>
   private gitRefreshInFlight = false
   private gitRefreshQueued = false
+  /** Monotonic state version: stale async pushState results are dropped. */
+  private stateVersion = 0
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.selectedRepo = context.globalState.get<string | null>(SELECTED_KEY, null)
@@ -491,7 +493,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async revealTocNode(repo: string, nodeId: string): Promise<void> {
-    const { toc } = this.loadTocForRepo(repo)
+    const { toc } = await this.loadTocForRepo(repo)
     const found = findTocNode(toc, nodeId)
     if (!found) {
       this.pushState()
@@ -539,7 +541,9 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     await vscode.window.showTextDocument(doc, { preview: true })
   }
 
-  private loadTocForRepo(repo: string | null): { toc: TocNode[]; tocError: string | null } {
+  private async loadTocForRepo(
+    repo: string | null
+  ): Promise<{ toc: TocNode[]; tocError: string | null }> {
     if (!repo) return { toc: [], tocError: null }
     const detected = this.detect()
     let repoRoot: string | null = null
@@ -550,7 +554,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     }
     if (!repoRoot) return { toc: [], tocError: '未识别到知识库' }
     try {
-      return { toc: readToc(repoRoot), tocError: null }
+      return { toc: await readToc(repoRoot), tocError: null }
     } catch (e) {
       return {
         toc: [],
@@ -559,7 +563,8 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private pushState(): void {
+  private async pushState(): Promise<void> {
+    const version = ++this.stateVersion
     if (!this.view) return
 
     this.ensureGitWatcher()
@@ -651,7 +656,8 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
         : fallbackIconUri
     }
 
-    const { toc, tocError } = this.loadTocForRepo(this.selectedRepo)
+    const { toc, tocError } = await this.loadTocForRepo(this.selectedRepo)
+    if (version !== this.stateVersion) return
     const storedTocPins = this.getTocPinnedIds(this.selectedRepo)
     const tocPinnedIds = filterPinnedTocIds(storedTocPins, toc)
     if (
