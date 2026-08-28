@@ -15,8 +15,12 @@ export type TocNode =
   | {
       type: 'note'
       title: string
+      /** Index-free display title (core summary.title); used for rename pre-fill. */
+      noteTitle: string
       noteDir: string
       noteIndex: string
+      noteUuid: string
+      noteRevision: string
       tocLineIndex: number
       nodeId: string
       completed: boolean
@@ -47,8 +51,11 @@ function toNavTocNodes(snapshot: KnowledgeBaseSnapshot): TocNode[] {
       result.push({
         type: 'note',
         title: note.dirName,
+        noteTitle: note.title,
         noteDir: note.dirName,
         noteIndex: node.noteIndex,
+        noteUuid: note.uuid,
+        noteRevision: note.revision,
         tocLineIndex: node.tocLineIndex,
         nodeId: nodeIdForNote(node.noteIndex),
         completed: note.config.done,
@@ -60,9 +67,15 @@ function toNavTocNodes(snapshot: KnowledgeBaseSnapshot): TocNode[] {
   return build(snapshot.toc, [])
 }
 
-export async function readToc(repoRoot: string): Promise<TocNode[]> {
+export interface TocReadResult {
+  toc: TocNode[]
+  /** Snapshot revision of the repo; required for subsequent mutations. */
+  revision: string
+}
+
+export async function readToc(repoRoot: string): Promise<TocReadResult> {
   const snapshot = await getWorkspace(repoRoot).inspect()
-  return toNavTocNodes(snapshot)
+  return { toc: toNavTocNodes(snapshot), revision: snapshot.revision }
 }
 
 export function noteReadmePath(repoRoot: string, noteDir: string): string {

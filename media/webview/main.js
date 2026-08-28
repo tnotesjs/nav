@@ -107,6 +107,20 @@
     document.body.appendChild(menu)
     contextMenuEl = menu
 
+    // Clamp the menu inside the webview viewport: flip to the left when it
+    // would overflow the right edge, pull up when it would overflow the bottom
+    // (otherwise items wrap vertically near the panel's right edge).
+    const viewportW = document.documentElement.clientWidth
+    const viewportH = document.documentElement.clientHeight
+    const menuW = menu.offsetWidth
+    const menuH = menu.offsetHeight
+    let left = x
+    let top = y
+    if (left + menuW > viewportW - 4) left = Math.max(4, viewportW - menuW - 4)
+    if (top + menuH > viewportH - 4) top = Math.max(4, viewportH - menuH - 4)
+    menu.style.left = `${left}px`
+    menu.style.top = `${top}px`
+
     const onDoc = (ev) => {
       if (contextMenuEl && !contextMenuEl.contains(ev.target)) {
         hideContextMenu()
@@ -601,13 +615,113 @@
         post('openNote', { noteDir: node.noteDir })
       }
     })
+
+    // --- drag & drop reorder (0002: writes go through Core Workspace) ---
+    row.draggable = true
+    row.addEventListener('dragstart', (e) => {
+      if (e.dataTransfer) {
+        e.dataTransfer.setData('text/plain', node.nodeId)
+        e.dataTransfer.effectAllowed = 'move'
+        // Custom very-faint drag ghost so the drop indicator stays visible.
+        const ghost = row.cloneNode(true)
+        ghost.style.opacity = '0.08'
+        ghost.style.position = 'absolute'
+        ghost.style.top = '-10000px'
+        ghost.style.left = '-10000px'
+        document.body.appendChild(ghost)
+        e.dataTransfer.setDragImage(ghost, 0, 0)
+        window.setTimeout(() => ghost.remove(), 0)
+      }
+      row.classList.add('dragging')
+    })
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging')
+      row.classList.remove('drop-before', 'drop-after', 'drop-inside')
+    })
+    row.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer || !e.dataTransfer.types.includes('text/plain')) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      const rect = row.getBoundingClientRect()
+      const ratio = (e.clientY - rect.top) / Math.max(rect.height, 1)
+      // Indicator aligns with the target's indent so before/after lines at
+      // different tree levels are visually distinct (e.g. last child inside a
+      // group vs the group itself).
+      if (row.style.paddingLeft) {
+        row.style.setProperty('--drop-indent', row.style.paddingLeft)
+      }
+      row.classList.remove('drop-before', 'drop-after', 'drop-inside')
+      row.classList.add(
+        ratio < 0.3 ? 'drop-before' : ratio > 0.7 ? 'drop-after' : 'drop-inside'
+      )
+    })
+    row.addEventListener('dragleave', () => {
+      row.classList.remove('drop-before', 'drop-after', 'drop-inside')
+    })
+    row.addEventListener('drop', (e) => {
+      e.preventDefault()
+      row.classList.remove('drop-before', 'drop-after', 'drop-inside')
+      if (!e.dataTransfer) return
+      const sourceNodeId = e.dataTransfer.getData('text/plain')
+      if (!sourceNodeId || sourceNodeId === node.nodeId) return
+      const rect = row.getBoundingClientRect()
+      const ratio = (e.clientY - rect.top) / Math.max(rect.height, 1)
+      const placement = ratio < 0.3 ? 'before' : ratio > 0.7 ? 'after' : 'inside'
+      post('tocMove', {
+        repo: state.selectedRepo,
+        sourceNodeId,
+        targetNodeId: node.nodeId,
+        placement
+      })
+    })
+
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault()
       e.stopPropagation()
       const items = [
         {
+          label: '在上方新建笔记',
+          onPick: () =>
+            post('tocCreateNote', {
+              repo: state.selectedRepo,
+              targetNodeId: node.nodeId,
+              placement: 'before'
+            })
+        },
+        {
+          label: '在上方新建分组',
+          onPick: () =>
+            post('tocCreateGroup', {
+              repo: state.selectedRepo,
+              targetNodeId: node.nodeId,
+              placement: 'before'
+            })
+        },
+        {
+          label: '在下方新建笔记',
+          onPick: () =>
+            post('tocCreateNote', {
+              repo: state.selectedRepo,
+              targetNodeId: node.nodeId,
+              placement: 'after'
+            })
+        },
+        {
+          label: '在下方新建分组',
+          onPick: () =>
+            post('tocCreateGroup', {
+              repo: state.selectedRepo,
+              targetNodeId: node.nodeId,
+              placement: 'after'
+            })
+        },
+        {
           label: pinned ? '取消置顶' : '置顶',
           onPick: () => toggleTocPin(node.nodeId)
+        },
+        {
+          label: '重命名',
+          onPick: () => post('tocRename', { repo: state.selectedRepo, nodeId: node.nodeId })
         }
       ]
       if (!isGroup && node.noteDir) {
@@ -616,6 +730,10 @@
           onPick: () => post('copyNotePath', { noteDir: node.noteDir })
         })
       }
+      items.push({
+        label: '删除',
+        onPick: () => post('tocDelete', { repo: state.selectedRepo, nodeId: node.nodeId })
+      })
       showContextMenu(e.clientX, e.clientY, items)
     })
 

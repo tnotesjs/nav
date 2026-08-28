@@ -18,6 +18,8 @@ import {
   repoReadmePath,
   type TocNode
 } from '../toc'
+import { getWorkspace } from '../toc/coreWorkspace'
+import type { TocEntryRef } from '@tnotesjs/core/workspace'
 import {
   getAddressBarPath,
   getNavRoot,
@@ -53,6 +55,10 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
   private gitRefreshQueued = false
   /** Monotonic state version: stale async pushState results are dropped. */
   private stateVersion = 0
+  /** TOC tree of the currently selected repo (used to map nodeId -> core refs). */
+  private currentToc: TocNode[] = []
+  /** Snapshot revision of the selected repo (required input for mutations). */
+  private tocRevision: string | null = null
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.selectedRepo = context.globalState.get<string | null>(SELECTED_KEY, null)
@@ -122,6 +128,50 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
         case 'revealTocNode':
           if (typeof msg.repo === 'string' && typeof msg.nodeId === 'string') {
             await this.revealTocNode(msg.repo, msg.nodeId)
+          }
+          break
+        case 'tocMove':
+          if (
+            typeof msg.repo === 'string' &&
+            typeof msg.sourceNodeId === 'string' &&
+            typeof msg.targetNodeId === 'string' &&
+            (msg.placement === 'before' ||
+              msg.placement === 'after' ||
+              msg.placement === 'inside')
+          ) {
+            await this.tocMove(msg.repo, msg.sourceNodeId, msg.targetNodeId, msg.placement)
+          }
+          break
+        case 'tocRename':
+          if (typeof msg.repo === 'string' && typeof msg.nodeId === 'string') {
+            await this.tocRename(msg.repo, msg.nodeId)
+          }
+          break
+        case 'tocCreateNote':
+          if (
+            typeof msg.repo === 'string' &&
+            typeof msg.targetNodeId === 'string' &&
+            (msg.placement === 'before' ||
+              msg.placement === 'after' ||
+              msg.placement === 'inside')
+          ) {
+            await this.tocCreateNote(msg.repo, msg.targetNodeId, msg.placement)
+          }
+          break
+        case 'tocCreateGroup':
+          if (typeof msg.repo === 'string') {
+            const placement =
+              msg.placement === 'before' ? 'before' : msg.placement === 'after' ? 'after' : 'inside'
+            await this.tocCreateGroup(
+              msg.repo,
+              typeof msg.targetNodeId === 'string' ? msg.targetNodeId : undefined,
+              placement
+            )
+          }
+          break
+        case 'tocDelete':
+          if (typeof msg.repo === 'string' && typeof msg.nodeId === 'string') {
+            await this.tocDelete(msg.repo, msg.nodeId)
           }
           break
         case 'openNote':
@@ -511,6 +561,197 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     void this.view?.webview.postMessage({ type: 'scrollToTocNode', nodeId })
   }
 
+  // ---------------------------------------------------------------------------
+  // TOC mutations (0002): all writes go through Core Workspace.
+  // ---------------------------------------------------------------------------
+
+  /** Root of a repo in the current mode, else null. */
+  private repoRootFor(repo: string | null): string | null {
+    if (!repo) return null
+    const detected = this.detect()
+    if (detected.mode === 'single' && detected.repoName === repo) return detected.root
+    if (detected.mode === 'multi') return join(detected.root, repo)
+    return null
+  }
+
+  /** Nav TOC node -> core TocEntryRef (note uuid or folder path). */
+  private tocEntryFor(node: TocNode): TocEntryRef | null {
+    if (node.type === 'note') return { type: 'note', noteUuid: node.noteUuid }
+    return { type: 'folder', folderPath: node.folderPath }
+  }
+
+  private currentEntry(nodeId: string): TocNode | null {
+    return findTocNode(this.currentToc, nodeId)?.node ?? null
+  }
+
+  private async mutationGuard(op: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await op()
+      return true
+    } catch (e) {
+      void vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e))
+      return false
+    }
+  }
+
+  private async tocMove(
+    repo: string,
+    sourceNodeId: string,
+    targetNodeId: string,
+    placement: 'before' | 'after' | 'inside'
+  ): Promise<void> {
+    const root = this.repoRootFor(repo)
+    if (!root || !this.tocRevision) return
+    const source = this.currentEntry(sourceNodeId)
+    const target = this.currentEntry(targetNodeId)
+    if (!source || !target || source.nodeId === target.nodeId) return
+    const src = this.tocEntryFor(source)
+    const tgt = this.tocEntryFor(target)
+    if (!src || !tgt) return
+    const ok = await this.mutationGuard(() =>
+      getWorkspace(root).toc.move({
+        source: src,
+        target: tgt,
+        placement,
+        expectedSnapshotRevision: this.tocRevision as string
+      })
+    )
+    if (ok) this.pushState()
+  }
+
+  private async tocRename(repo: string, nodeId: string): Promise<void> {
+    const root = this.repoRootFor(repo)
+    const node = this.currentEntry(nodeId)
+    if (!root || !this.tocRevision || !node) return
+    const next = await vscode.window.showInputBox({
+      title: node.type === 'group' ? '重命名分组' : '重命名笔记',
+      // Note names keep their 4-digit index (core prepends it on rename), so the
+      // dialog pre-fills the index-free title only.
+      value: node.type === 'group' ? node.title : node.noteTitle,
+      validateInput: (value) => (value.trim() ? null : '名称不能为空')
+    })
+    if (next === undefined || next.trim() === '' || next.trim() === node.title) return
+    const ok = await this.mutationGuard(async () => {
+      if (node.type === 'group') {
+        await getWorkspace(root).toc.renameGroup({
+          folderPath: node.folderPath,
+          title: next.trim(),
+          expectedSnapshotRevision: this.tocRevision as string
+        })
+      } else {
+        await getWorkspace(root).notes.rename({
+          noteUuid: node.noteUuid,
+          title: next.trim(),
+          expectedRevision: node.noteRevision
+        })
+      }
+    })
+    if (ok) this.pushState()
+  }
+
+  private async tocCreateGroup(
+    repo: string,
+    targetNodeId: string | undefined,
+    placement: 'before' | 'after' | 'inside' = 'after'
+  ): Promise<void> {
+    const root = this.repoRootFor(repo)
+    if (!root || !this.tocRevision) return
+    const title = await vscode.window.showInputBox({
+      title: '新建分组',
+      prompt: '分组名称',
+      validateInput: (value) => (value.trim() ? null : '名称不能为空')
+    })
+    if (title === undefined || title.trim() === '') return
+    const target = targetNodeId ? this.currentEntry(targetNodeId) : null
+    let notePlacement:
+      | { type: 'root'; placement?: 'start' | 'end' }
+      | { type: 'note'; targetNoteUuid: string; placement: 'before' | 'after' | 'inside' }
+      | { type: 'folder'; folderPath: string[]; placement: 'before' | 'after' | 'inside' }
+      | undefined
+    if (target) {
+      if (target.type === 'note') {
+        notePlacement = { type: 'note', targetNoteUuid: target.noteUuid, placement }
+      } else {
+        notePlacement = { type: 'folder', folderPath: target.folderPath, placement }
+      }
+    } else {
+      notePlacement = { type: 'root', placement: 'end' }
+    }
+    const ok = await this.mutationGuard(() =>
+      getWorkspace(root).toc.createGroup({
+        title: title.trim(),
+        placement: notePlacement,
+        expectedSnapshotRevision: this.tocRevision as string
+      })
+    )
+    if (ok) this.pushState()
+  }
+
+  private async tocCreateNote(
+    repo: string,
+    targetNodeId: string,
+    placement: 'before' | 'after' | 'inside'
+  ): Promise<void> {
+    const root = this.repoRootFor(repo)
+    if (!root || !this.tocRevision) return
+    const title = await vscode.window.showInputBox({
+      title: '新建笔记',
+      prompt: '笔记标题',
+      validateInput: (value) => (value.trim() ? null : '标题不能为空')
+    })
+    if (title === undefined || title.trim() === '') return
+    const target = this.currentEntry(targetNodeId)
+    if (!target) return
+    const notePlacement =
+      target.type === 'note'
+        ? { type: 'note' as const, targetNoteUuid: target.noteUuid, placement }
+        : { type: 'folder' as const, folderPath: target.folderPath, placement }
+    const ok = await this.mutationGuard(() =>
+      getWorkspace(root).notes.create({
+        title: title.trim(),
+        placement: notePlacement,
+        expectedSnapshotRevision: this.tocRevision as string
+      })
+    )
+    if (ok) this.pushState()
+  }
+
+  private async tocDelete(repo: string, nodeId: string): Promise<void> {
+    const root = this.repoRootFor(repo)
+    const node = this.currentEntry(nodeId)
+    if (!root || !this.tocRevision || !node) return
+    const entry = this.tocEntryFor(node)
+    if (!entry) return
+    let preview
+    try {
+      preview = await getWorkspace(root).toc.previewDelete(entry)
+    } catch (e) {
+      void vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e))
+      return
+    }
+    const label = node.type === 'group' ? `分组「${node.title}」` : `笔记「${node.title}」`
+    const noteList = preview.notes
+      .slice(0, 3)
+      .map((n) => n.title)
+      .join('、')
+    const suffix = preview.notes.length
+      ? `（将删除 ${preview.notes.length} 篇笔记：${noteList}${preview.notes.length > 3 ? '…' : ''}）`
+      : ''
+    const choice = await vscode.window.showWarningMessage(
+      `确定删除 ${label}${suffix}？此操作会修改 TOC 与目录文件。`,
+      { modal: true },
+      '删除'
+    )
+    if (choice !== '删除') return
+    const ok = await this.mutationGuard(() =>
+      getWorkspace(root).toc.deleteEntry({
+        entry,
+        expectedSnapshotRevision: this.tocRevision as string
+      })
+    )
+    if (ok) this.pushState()
+  }
+
   private async openNote(noteDir: string): Promise<void> {
     const repoRoot = this.resolveRepoRoot()
     if (!repoRoot) {
@@ -543,8 +784,8 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
 
   private async loadTocForRepo(
     repo: string | null
-  ): Promise<{ toc: TocNode[]; tocError: string | null }> {
-    if (!repo) return { toc: [], tocError: null }
+  ): Promise<{ toc: TocNode[]; tocError: string | null; revision: string | null }> {
+    if (!repo) return { toc: [], tocError: null, revision: null }
     const detected = this.detect()
     let repoRoot: string | null = null
     if (detected.mode === 'single' && detected.repoName === repo) {
@@ -552,13 +793,15 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     } else if (detected.mode === 'multi') {
       repoRoot = join(detected.root, repo)
     }
-    if (!repoRoot) return { toc: [], tocError: '未识别到知识库' }
+    if (!repoRoot) return { toc: [], tocError: '未识别到知识库', revision: null }
     try {
-      return { toc: await readToc(repoRoot), tocError: null }
+      const result = await readToc(repoRoot)
+      return { toc: result.toc, tocError: null, revision: result.revision }
     } catch (e) {
       return {
         toc: [],
-        tocError: e instanceof Error ? e.message : String(e)
+        tocError: e instanceof Error ? e.message : String(e),
+        revision: null
       }
     }
   }
@@ -656,8 +899,10 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
         : fallbackIconUri
     }
 
-    const { toc, tocError } = await this.loadTocForRepo(this.selectedRepo)
+    const { toc, tocError, revision } = await this.loadTocForRepo(this.selectedRepo)
     if (version !== this.stateVersion) return
+    this.currentToc = toc
+    this.tocRevision = revision
     const storedTocPins = this.getTocPinnedIds(this.selectedRepo)
     const tocPinnedIds = filterPinnedTocIds(storedTocPins, toc)
     if (

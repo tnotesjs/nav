@@ -321,6 +321,32 @@ body {
   background: var(--vscode-list-hoverBackground);
 }
 
+/* drag & drop reorder feedback (0002) */
+.toc-item.dragging {
+  opacity: 0.15;
+}
+.toc-item.drop-before::after,
+.toc-item.drop-after::after {
+  content: '';
+  position: absolute;
+  left: var(--drop-indent, 8px);
+  right: 4px;
+  height: 2px;
+  background: var(--vscode-list-highlightForeground, var(--vscode-focusBorder));
+  border-radius: 1px;
+}
+.toc-item.drop-before::after {
+  top: 0;
+}
+.toc-item.drop-after::after {
+  bottom: 0;
+}
+.drop-inside .toc-item,
+.toc-item.drop-inside {
+  outline: 1px dashed var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
 .toc-item.toc-group .toc-label {
   font-weight: 600;
 }
@@ -581,6 +607,7 @@ body {
   padding: 4px 12px;
   font: inherit;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .ctx-item:hover {
