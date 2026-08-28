@@ -36,6 +36,7 @@ const TOC_PINNED_COLLAPSED_KEY = 'tnotesNav.tocPinnedCollapsedByRepo'
 const TOC_CHANGES_COLLAPSED_KEY = 'tnotesNav.tocChangesCollapsedByRepo'
 const DEFAULT_LEFT = 140
 const GIT_DEBOUNCE_MS = 700
+const TOC_DEBOUNCE_MS = 400
 
 type TocCollapsedMap = Record<string, string[]>
 type TocPinnedMap = Record<string, string[]>
@@ -53,6 +54,9 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
   private gitTimer?: ReturnType<typeof setTimeout>
   private gitRefreshInFlight = false
   private gitRefreshQueued = false
+  private tocWatcher?: vscode.FileSystemWatcher
+  private tocWatchRoot?: string
+  private tocTimer?: ReturnType<typeof setTimeout>
   /** Monotonic state version: stale async pushState results are dropped. */
   private stateVersion = 0
   /** TOC tree of the currently selected repo (used to map nodeId -> core refs). */
@@ -63,7 +67,10 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
   constructor(private readonly context: vscode.ExtensionContext) {
     this.selectedRepo = context.globalState.get<string | null>(SELECTED_KEY, null)
     context.subscriptions.push({
-      dispose: () => this.disposeGitWatch()
+      dispose: () => {
+        this.disposeGitWatch()
+        this.disposeTocWatch()
+      }
     })
   }
 
@@ -217,6 +224,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     })
 
     this.ensureGitWatcher()
+    this.ensureTocWatcher()
   }
 
   refresh(): void {
@@ -233,6 +241,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     this.selectedRepo = null
     await this.context.globalState.update(SELECTED_KEY, null)
     this.disposeGitWatch()
+    this.disposeTocWatch()
     this.pushState()
   }
 
@@ -291,6 +300,68 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
       this.gitTimer = undefined
       void this.refreshGitStatuses()
     }, GIT_DEBOUNCE_MS)
+  }
+
+  // ---------------------------------------------------------------------------
+  // 0003: lightweight TOC watch. TOC.md change + note-folder events re-read the
+  // selected repo's tree (via Core refresh); git badges refresh alongside.
+  // ---------------------------------------------------------------------------
+
+  private disposeTocWatch(): void {
+    if (this.tocTimer) {
+      clearTimeout(this.tocTimer)
+      this.tocTimer = undefined
+    }
+    this.tocWatcher?.dispose()
+    this.tocWatcher = undefined
+    this.tocWatchRoot = undefined
+  }
+
+  private ensureTocWatcher(): void {
+    const root = getNavRoot()
+    if (!root || !existsSync(root)) {
+      this.disposeTocWatch()
+      return
+    }
+    if (this.tocWatcher && this.tocWatchRoot === root) return
+
+    this.disposeTocWatch()
+    this.tocWatchRoot = root
+
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(root), '**/{TOC.md,notes/*}')
+    )
+    const onFs = (uri: vscode.Uri) => this.scheduleTocRefresh(uri)
+    watcher.onDidChange(onFs)
+    watcher.onDidCreate(onFs)
+    watcher.onDidDelete(onFs)
+    this.tocWatcher = watcher
+  }
+
+  private scheduleTocRefresh(uri: vscode.Uri): void {
+    this.scheduleGitRefresh()
+    const detected = this.detect()
+    if (!this.selectedRepo) return
+    const mode = detected.mode
+    if (mode === 'none') return
+
+    let changedRepo: string
+    if (mode === 'single') {
+      changedRepo = detected.repoName
+    } else {
+      const root = (getNavRoot() ?? '').replace(/\\/g, '/')
+      const path = uri.fsPath.replace(/\\/g, '/')
+      const rel = root && path.startsWith(root) ? path.slice(root.length + 1) : path
+      changedRepo = rel.split('/')[0] ?? ''
+    }
+    // Only the selected repo's tree is rendered; other repos re-read on select.
+    if (changedRepo !== this.selectedRepo) return
+
+    if (this.tocTimer) clearTimeout(this.tocTimer)
+    this.tocTimer = setTimeout(() => {
+      this.tocTimer = undefined
+      this.pushState()
+    }, TOC_DEBOUNCE_MS)
   }
 
   private listRepoRootsForGit(detected: DetectedWorkspace = this.detect()): Array<{
@@ -811,6 +882,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     if (!this.view) return
 
     this.ensureGitWatcher()
+    this.ensureTocWatcher()
 
     const webview = this.view.webview
     const mediaRoot = vscode.Uri.joinPath(this.context.extensionUri, 'media')
