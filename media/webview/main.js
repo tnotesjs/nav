@@ -279,7 +279,58 @@
         letter: marks[noteDir]
       })
     }
-    return entries
+
+    return mergeRenameEntries(entries)
+  }
+
+  /**
+   * Display-level merge for unstaged note renames: git reports them as a
+   * tracked deletion (old dir, 'D') plus an untracked new dir ('U'). TNotes
+   * note indexes (first 4 digits) are unique + immutable, so same-index pairs
+   * are exactly one rename. COUNT uses the raw porcelain count elsewhere, so
+   * this only reshapes the rendered list.
+   */
+  function noteIndexFromDir(dir) {
+    const m = /^(\d{4})\./.exec(dir || '')
+    return m ? m[1] : null
+  }
+
+  function mergeRenameEntries(entries) {
+    const consumed = new Set()
+    const result = []
+    for (const entry of entries) {
+      if (consumed.has(entry)) continue
+      if (entry.kind !== 'note') {
+        result.push(entry)
+        continue
+      }
+      const index = noteIndexFromDir(entry.noteDir)
+      if (!index || (entry.letter !== 'D' && entry.letter !== 'U')) {
+        result.push(entry)
+        continue
+      }
+      const counterpart = entries.find(
+        (other) =>
+          other !== entry &&
+          other.kind === 'note' &&
+          noteIndexFromDir(other.noteDir) === index &&
+          (entry.letter === 'D' ? other.letter === 'U' : other.letter === 'D')
+      )
+      if (!counterpart) {
+        result.push(entry)
+        continue
+      }
+      consumed.add(entry)
+      consumed.add(counterpart)
+      const oldEntry = entry.letter === 'D' ? entry : counterpart
+      const newEntry = entry.letter === 'D' ? counterpart : entry
+      result.push({
+        ...newEntry,
+        title: `${displayNoteTitle(oldEntry.noteDir)} → ${displayNoteTitle(newEntry.noteDir)}`,
+        letter: 'R'
+      })
+    }
+    return result
   }
 
   function renderChangesSection() {
@@ -304,7 +355,9 @@
 
     const title = document.createElement('span')
     title.className = 'toc-pinned-title-text'
-    title.textContent = collapsed ? `变更 (${entries.length})` : '变更'
+    title.textContent = collapsed
+      ? `变更 (${gitStatusFor(state.selectedRepo)?.changed ?? entries.length})`
+      : '变更'
 
     heading.appendChild(chevron)
     heading.appendChild(title)
