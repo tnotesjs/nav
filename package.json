@@ -82,7 +82,7 @@
     "package": "npm run typecheck && vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@tnotesjs/core": "^0.6.1",
+    "@tnotesjs/core": "^0.7.0",
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.96.0",
     "@vscode/vsce": "^3.2.2",
