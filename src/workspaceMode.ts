@@ -5,12 +5,11 @@ export type WorkspaceMode = 'multi' | 'single' | 'none'
 
 export type DetectedWorkspace =
   | { mode: 'multi'; root: string }
-  | { mode: 'single'; root: string; repoName: string; format: 'new' | 'legacy' }
+  | { mode: 'single'; root: string; repoName: string }
   | { mode: 'none'; root: string | null }
 
 const TOC_FILE = 'TOC.md'
 const KB_CONFIG_FILE = 'tnotes.json'
-const LEGACY_CONFIG_FILE = '.tnotes.json'
 
 function hasTNotesSiblingDir(root: string): boolean {
   try {
@@ -30,16 +29,9 @@ function isFile(root: string, name: string): boolean {
   }
 }
 
-/**
- * Single-KB detection: TOC.md + tnotes.json (new single-file format).
- * Legacy repos (TOC.md + .tnotes.json) are still recognized so the panel can
- * show a migration hint instead of pretending there is no knowledge base.
- */
-function singleKbFormat(root: string): 'new' | 'legacy' | null {
-  if (!isFile(root, TOC_FILE)) return null
-  if (isFile(root, KB_CONFIG_FILE)) return 'new'
-  if (isFile(root, LEGACY_CONFIG_FILE)) return 'legacy'
-  return null
+/** Single-KB detection: TOC.md + tnotes.json (single-file format). */
+function isSingleKb(root: string): boolean {
+  return isFile(root, TOC_FILE) && isFile(root, KB_CONFIG_FILE)
 }
 
 /**
@@ -63,9 +55,8 @@ export function detectWorkspaceMode(root: string | undefined | null): DetectedWo
     return { mode: 'multi', root }
   }
 
-  const format = singleKbFormat(root)
-  if (format) {
-    return { mode: 'single', root, repoName: basename(root), format }
+  if (isSingleKb(root)) {
+    return { mode: 'single', root, repoName: basename(root) }
   }
 
   return { mode: 'none', root }

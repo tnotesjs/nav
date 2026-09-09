@@ -15,20 +15,6 @@ export interface SingleRepoMeta {
   iconFile: string | null
 }
 
-interface RootItemMeta {
-  title?: string
-  icon?: { src?: string }
-}
-
-interface TNotesRootConfig {
-  root_items?: Record<string, RootItemMeta>
-}
-
-interface SingleTNotesConfig {
-  repoName?: string
-  root_item?: RootItemMeta
-}
-
 interface KbConfigMeta {
   name?: string
   title?: string
@@ -43,18 +29,7 @@ export function loadIconManifest(manifestPath: string): Record<string, string> {
   }
 }
 
-function loadRootItems(workspaceRoot: string): Record<string, RootItemMeta> {
-  const configPath = join(workspaceRoot, 'TNotes', '.tnotes.json')
-  if (!existsSync(configPath)) return {}
-  try {
-    const data = JSON.parse(readFileSync(configPath, 'utf-8')) as TNotesRootConfig
-    return data.root_items ?? {}
-  } catch {
-    return {}
-  }
-}
-
-/** Title from the repo's own tnotes.json (new format), or null when absent. */
+/** Title from the repo's own tnotes.json, or null when absent. */
 function readKbConfigTitle(repoRoot: string): string | null {
   try {
     const data = JSON.parse(
@@ -75,7 +50,6 @@ export function listKnowledgeBases(
   }
 
   const blacklist = getBlacklist()
-  const rootItems = loadRootItems(workspaceRoot)
 
   const names = readdirSync(workspaceRoot)
     .filter((name) => name.startsWith('TNotes.'))
@@ -90,11 +64,8 @@ export function listKnowledgeBases(
     .sort((a, b) => a.localeCompare(b))
 
   return names.map((repo) => {
-    // New format: each repo carries its own title in tnotes.json. The root
-    // repo's .tnotes.json root_items only remains as a legacy fallback.
     const title =
       readKbConfigTitle(join(workspaceRoot, repo)) ??
-      rootItems[repo]?.title?.trim() ??
       repo.replace(/^TNotes\./, '')
     const iconFile = iconManifest[repo] ?? null
     return { repo, title, iconFile }
@@ -115,17 +86,7 @@ export function loadSingleRepoMeta(
     if (fromTitle) title = fromTitle
     else if (fromName) title = fromName.replace(/^TNotes\./, '')
   } catch {
-    // Legacy fallback: .tnotes.json (pre-migration repos).
-    try {
-      const raw = readFileSync(join(repoRoot, '.tnotes.json'), 'utf-8')
-      const data = JSON.parse(raw) as SingleTNotesConfig
-      const fromRoot = data.root_item?.title?.trim()
-      const fromName = data.repoName?.trim()
-      if (fromRoot) title = fromRoot
-      else if (fromName) title = fromName.replace(/^TNotes\./, '')
-    } catch {
-      // keep fallback title
-    }
+    // keep fallback title
   }
   return {
     repoName,

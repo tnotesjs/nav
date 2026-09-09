@@ -84,13 +84,12 @@ export interface TocReadResult {
 
 /**
  * Nav only reads the single-file format (tnotes.json + TOC.md + notes/*.md).
- * Old-format repos (per-note directories + .tnotes.json) must be migrated
- * with tnotes-kb-migrate first — fail loudly instead of showing an empty tree.
+ * 旧格式（.tnotes.json）已随 core 归档彻底淘汰，遇到时直接报错而非显示空树。
  */
 function assertSingleFileFormat(repoRoot: string): void {
   if (existsSync(join(repoRoot, 'tnotes.json'))) return
   if (existsSync(join(repoRoot, '.tnotes.json'))) {
-    throw new Error('该知识库仍是旧格式（.tnotes.json），请先用 tnotes-kb-migrate 迁移')
+    throw new Error('该知识库仍是旧格式（.tnotes.json），当前版本已不再支持')
   }
 }
 
