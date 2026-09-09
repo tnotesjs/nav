@@ -13,13 +13,14 @@ import {
   filterPinnedTocIds,
   findTocNode,
   flattenPinnedNodes,
-  noteReadmePath,
+  noteFilePath,
+  previewDelete,
   readToc,
   repoReadmePath,
   type TocNode
 } from '../toc'
-import { getWorkspace } from '../toc/coreWorkspace'
-import type { TocEntryRef } from '@tnotesjs/core/workspace'
+import { getWorkspace } from '../toc/kbWorkspace'
+import type { Placement, TocEntryRef } from '@tnotesjs/kb'
 import {
   getAddressBarPath,
   getNavRoot,
@@ -478,12 +479,12 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
       void vscode.window.showWarningMessage('TNotes Nav: 请先选择知识库')
       return
     }
-    const readme = noteReadmePath(repoRoot, noteDir)
-    if (!existsSync(readme)) {
+    const notePath = noteFilePath(repoRoot, noteDir)
+    if (!existsSync(notePath)) {
       void vscode.window.showWarningMessage(`笔记不存在: ${noteDir}`)
       return
     }
-    await this.copyText(readme)
+    await this.copyText(notePath)
   }
 
   private getPinnedRepos(): string[] {
@@ -645,10 +646,10 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     return null
   }
 
-  /** Nav TOC node -> core TocEntryRef (note uuid or folder path). */
+  /** Nav TOC node -> kb TocEntryRef (note index or group path). */
   private tocEntryFor(node: TocNode): TocEntryRef | null {
-    if (node.type === 'note') return { type: 'note', noteUuid: node.noteUuid }
-    return { type: 'folder', folderPath: node.folderPath }
+    if (node.type === 'note') return { type: 'note', index: node.noteIndex }
+    return { type: 'group', groupPath: node.folderPath }
   }
 
   private currentEntry(nodeId: string): TocNode | null {
@@ -683,8 +684,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
       getWorkspace(root).toc.move({
         source: src,
         target: tgt,
-        placement,
-        expectedSnapshotRevision: this.tocRevision as string
+        placement
       })
     )
     if (ok) this.pushState()
@@ -696,7 +696,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     if (!root || !this.tocRevision || !node) return
     const next = await vscode.window.showInputBox({
       title: node.type === 'group' ? '重命名分组' : '重命名笔记',
-      // Note names keep their 4-digit index (core prepends it on rename), so the
+      // Note files keep their 4-digit index (kb prepends it on rename), so the
       // dialog pre-fills the index-free title only.
       value: node.type === 'group' ? node.title : node.noteTitle,
       validateInput: (value) => (value.trim() ? null : '名称不能为空')
@@ -705,15 +705,13 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     const ok = await this.mutationGuard(async () => {
       if (node.type === 'group') {
         await getWorkspace(root).toc.renameGroup({
-          folderPath: node.folderPath,
-          title: next.trim(),
-          expectedSnapshotRevision: this.tocRevision as string
+          groupPath: node.folderPath,
+          title: next.trim()
         })
       } else {
         await getWorkspace(root).notes.rename({
-          noteUuid: node.noteUuid,
-          title: next.trim(),
-          expectedRevision: node.noteRevision
+          index: node.noteIndex,
+          title: next.trim()
         })
       }
     })
@@ -734,16 +732,12 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     })
     if (title === undefined || title.trim() === '') return
     const target = targetNodeId ? this.currentEntry(targetNodeId) : null
-    let notePlacement:
-      | { type: 'root'; placement?: 'start' | 'end' }
-      | { type: 'note'; targetNoteUuid: string; placement: 'before' | 'after' | 'inside' }
-      | { type: 'folder'; folderPath: string[]; placement: 'before' | 'after' | 'inside' }
-      | undefined
+    let notePlacement: Placement | undefined
     if (target) {
       if (target.type === 'note') {
-        notePlacement = { type: 'note', targetNoteUuid: target.noteUuid, placement }
+        notePlacement = { type: 'note', targetIndex: target.noteIndex, placement }
       } else {
-        notePlacement = { type: 'folder', folderPath: target.folderPath, placement }
+        notePlacement = { type: 'group', groupPath: target.folderPath, placement }
       }
     } else {
       notePlacement = { type: 'root', placement: 'end' }
@@ -751,8 +745,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     const ok = await this.mutationGuard(() =>
       getWorkspace(root).toc.createGroup({
         title: title.trim(),
-        placement: notePlacement,
-        expectedSnapshotRevision: this.tocRevision as string
+        placement: notePlacement
       })
     )
     if (ok) this.pushState()
@@ -773,15 +766,14 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     if (title === undefined || title.trim() === '') return
     const target = this.currentEntry(targetNodeId)
     if (!target) return
-    const notePlacement =
+    const notePlacement: Placement =
       target.type === 'note'
-        ? { type: 'note' as const, targetNoteUuid: target.noteUuid, placement }
-        : { type: 'folder' as const, folderPath: target.folderPath, placement }
+        ? { type: 'note', targetIndex: target.noteIndex, placement }
+        : { type: 'group', groupPath: target.folderPath, placement }
     const ok = await this.mutationGuard(() =>
       getWorkspace(root).notes.create({
         title: title.trim(),
-        placement: notePlacement,
-        expectedSnapshotRevision: this.tocRevision as string
+        placement: notePlacement
       })
     )
     if (ok) this.pushState()
@@ -795,7 +787,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     if (!entry) return
     let preview
     try {
-      preview = await getWorkspace(root).toc.previewDelete(entry)
+      preview = await previewDelete(root, entry)
     } catch (e) {
       void vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e))
       return
@@ -815,10 +807,7 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
     )
     if (choice !== '删除') return
     const ok = await this.mutationGuard(() =>
-      getWorkspace(root).toc.deleteEntry({
-        entry,
-        expectedSnapshotRevision: this.tocRevision as string
-      })
+      getWorkspace(root).toc.removeEntry(entry)
     )
     if (ok) this.pushState()
   }
@@ -829,12 +818,12 @@ export class NavPanelProvider implements vscode.WebviewViewProvider {
       void vscode.window.showWarningMessage('TNotes Nav: 请先选择知识库')
       return
     }
-    const readme = noteReadmePath(repoRoot, noteDir)
-    if (!existsSync(readme)) {
+    const notePath = noteFilePath(repoRoot, noteDir)
+    if (!existsSync(notePath)) {
       void vscode.window.showWarningMessage(`笔记不存在: ${noteDir}`)
       return
     }
-    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(readme))
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(notePath))
     await vscode.window.showTextDocument(doc, { preview: true })
   }
 

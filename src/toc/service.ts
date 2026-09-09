@@ -1,7 +1,19 @@
+import { existsSync } from 'fs'
 import { join } from 'path'
-import { getWorkspace } from './coreWorkspace'
+import type {
+  KbSnapshot,
+  TocEntryRef,
+  TocNode as KbTocNode
+} from '@tnotesjs/kb'
+import {
+  collectSubtreeNoteIndexes,
+  findGroupLineIndex,
+  findNoteLineIndex,
+  readTocLines,
+  scanKnowledgeBase
+} from '@tnotesjs/kb'
+import { getWorkspace } from './kbWorkspace'
 import { nodeIdForFolder, nodeIdForNote } from './tocNodeId'
-import type { KnowledgeBaseSnapshot } from '@tnotesjs/core/workspace'
 
 export type TocNode =
   | {
@@ -14,51 +26,48 @@ export type TocNode =
     }
   | {
       type: 'note'
+      /** Display title with index, e.g. "0001. 最长回文子串" (the note file stem). */
       title: string
-      /** Index-free display title (core summary.title); used for rename pre-fill. */
+      /** Index-free display title; used for rename pre-fill. */
       noteTitle: string
+      /** Note file stem (`NNNN. 标题`) — webview key for open/git-marks. */
       noteDir: string
       noteIndex: string
-      noteUuid: string
-      noteRevision: string
       tocLineIndex: number
       nodeId: string
       completed: boolean
       children: TocNode[]
     }
 
-type SnapshotTocNode = KnowledgeBaseSnapshot['toc'][number]
-
-function toNavTocNodes(snapshot: KnowledgeBaseSnapshot): TocNode[] {
+function toNavTocNodes(snapshot: KbSnapshot): TocNode[] {
   const byIndex = new Map(snapshot.notes.map((note) => [note.index, note]))
-  const build = (nodes: SnapshotTocNode[], folderPath: string[]): TocNode[] => {
+  const build = (nodes: KbTocNode[], folderPath: string[]): TocNode[] => {
     const result: TocNode[] = []
     for (const node of nodes) {
-      if (node.kind === 'folder') {
+      if (node.kind === 'group') {
         const path = [...folderPath, node.title]
         result.push({
           type: 'group',
           title: node.title,
-          tocLineIndex: node.tocLineIndex,
+          tocLineIndex: node.lineIndex,
           nodeId: nodeIdForFolder(path),
           folderPath: path,
           children: build(node.children, path)
         })
         continue
       }
-      const note = byIndex.get(node.noteIndex)
+      const note = byIndex.get(node.index)
       if (!note) continue
+      const stem = `${node.index}. ${note.title}`
       result.push({
         type: 'note',
-        title: note.dirName,
+        title: stem,
         noteTitle: note.title,
-        noteDir: note.dirName,
-        noteIndex: node.noteIndex,
-        noteUuid: note.uuid,
-        noteRevision: note.revision,
-        tocLineIndex: node.tocLineIndex,
-        nodeId: nodeIdForNote(node.noteIndex),
-        completed: note.config.done,
+        noteDir: stem,
+        noteIndex: node.index,
+        tocLineIndex: node.lineIndex,
+        nodeId: nodeIdForNote(node.index),
+        completed: node.done,
         children: build(node.children, folderPath)
       })
     }
@@ -69,17 +78,48 @@ function toNavTocNodes(snapshot: KnowledgeBaseSnapshot): TocNode[] {
 
 export interface TocReadResult {
   toc: TocNode[]
-  /** Snapshot revision of the repo; required for subsequent mutations. */
+  /** Snapshot revision of the repo (changes on any structural edit). */
   revision: string
 }
 
+/**
+ * Nav only reads the single-file format (tnotes.json + TOC.md + notes/*.md).
+ * Old-format repos (per-note directories + .tnotes.json) must be migrated
+ * with tnotes-kb-migrate first — fail loudly instead of showing an empty tree.
+ */
+function assertSingleFileFormat(repoRoot: string): void {
+  if (existsSync(join(repoRoot, 'tnotes.json'))) return
+  if (existsSync(join(repoRoot, '.tnotes.json'))) {
+    throw new Error('该知识库仍是旧格式（.tnotes.json），请先用 tnotes-kb-migrate 迁移')
+  }
+}
+
 export async function readToc(repoRoot: string): Promise<TocReadResult> {
-  const snapshot = await getWorkspace(repoRoot).inspect()
+  assertSingleFileFormat(repoRoot)
+  const snapshot = await getWorkspace(repoRoot).scan()
   return { toc: toNavTocNodes(snapshot), revision: snapshot.revision }
 }
 
-export function noteReadmePath(repoRoot: string, noteDir: string): string {
-  return join(repoRoot, 'notes', noteDir, 'README.md')
+/** Titles of the notes that `toc.removeEntry(ref)` would delete (preview). */
+export async function previewDelete(
+  repoRoot: string,
+  ref: TocEntryRef
+): Promise<{ notes: Array<{ title: string }> }> {
+  const lines = await readTocLines(repoRoot)
+  const lineIndex =
+    ref.type === 'note'
+      ? findNoteLineIndex(lines, ref.index)
+      : findGroupLineIndex(lines, ref.groupPath)
+  const indexes = collectSubtreeNoteIndexes(lines, lineIndex)
+  const snapshot = await scanKnowledgeBase(repoRoot)
+  const byIndex = new Map(snapshot.notes.map((note) => [note.index, note]))
+  return {
+    notes: indexes.map((index) => ({ title: byIndex.get(index)?.title ?? index }))
+  }
+}
+
+export function noteFilePath(repoRoot: string, noteDir: string): string {
+  return join(repoRoot, 'notes', `${noteDir}.md`)
 }
 
 export function repoReadmePath(repoRoot: string): string {

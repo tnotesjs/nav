@@ -2,7 +2,7 @@
   "name": "tnotes-nav",
   "displayName": "TNotes Nav",
   "description": "Local TNotes knowledge-base navigator for VS Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "tnotesjs",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -76,18 +76,17 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:prettier --format=cjs --platform=node --sourcemap",
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "npm run build -- --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "package": "npm run typecheck && vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@tnotesjs/core": "^0.7.0",
+    "@tnotesjs/kb": "^0.2.1",
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.96.0",
     "@vscode/vsce": "^3.2.2",
     "esbuild": "^0.25.0",
-    "prettier": "^3.9.6",
     "typescript": "^5.7.2"
   },
   "packageManager": "pnpm@10.17.1",

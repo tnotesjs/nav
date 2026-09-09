@@ -2,15 +2,11 @@ import * as vscode from 'vscode'
 import { NavPanelProvider } from './panel/NavPanelProvider'
 import { getNavRoot } from './workspace'
 import { detectWorkspaceMode } from './workspaceMode'
-import { disposeWorkspaces } from './toc/coreWorkspace'
 
 export function activate(context: vscode.ExtensionContext): void {
   const panel = new NavPanelProvider(context)
 
   context.subscriptions.push(
-    new vscode.Disposable(() => {
-      void disposeWorkspaces()
-    }),
     vscode.window.registerWebviewViewProvider(NavPanelProvider.viewType, panel, {
       webviewOptions: { retainContextWhenHidden: true }
     }),

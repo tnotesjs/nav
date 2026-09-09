@@ -154,7 +154,11 @@ function pathToMarkKey(relPath: string): string | null {
   const p = relPath.replace(/\\/g, '/').replace(/^\.\//, '')
   if (p === 'README.md') return GIT_README_MARK_KEY
   const m = /^notes\/([^/]+)/.exec(p)
-  return m ? m[1] : null
+  if (!m) return null
+  // New single-file format: notes/NNNN. 标题.md → key is the stem, matching
+  // the old per-note directory name (notes/NNNN. 标题/README.md).
+  const segment = m[1]
+  return segment.endsWith('.md') ? segment.slice(0, -3) : segment
 }
 
 /** Parse porcelain stdout into dirty count + note/README marks. */
