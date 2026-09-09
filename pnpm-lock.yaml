@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@tnotesjs/kb':
-        specifier: ^0.2.1
-        version: 0.2.1
+        specifier: ^0.4.0
+        version: 0.4.0
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
@@ -320,8 +320,8 @@ packages:
   '@textlint/types@15.8.0':
     resolution: {integrity: sha512-Anhc6y5736YIsvqae0U6k0YmB2M/QVHkEeOv2aydAn/WIkdI69dCOiDbe3/+RagS3qstFTSFWJzNRA2lUjv19w==}
 
-  '@tnotesjs/kb@0.2.1':
-    resolution: {integrity: sha512-rxSZ5MG4qo+Wo1RmpUVJDs6FngahlAIHKbWOUcEmCDxHiofp1VEWCUN7fpLfIweJ3oeJVJMnndbPeUafgqjJ6g==}
+  '@tnotesjs/kb@0.4.0':
+    resolution: {integrity: sha512-x/GFfM6kXg3KL2wZadWetwRRxoVSPBXf5GJgxTkNRr3QF+v18iFfmYJ7GpyUN5TS7PSSeSxepHDjdiRmUdALNQ==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
@@ -1602,7 +1602,7 @@ snapshots:
     dependencies:
       '@textlint/ast-node-types': 15.8.0
 
-  '@tnotesjs/kb@0.2.1':
+  '@tnotesjs/kb@0.4.0':
     dependencies:
       gray-matter: 4.0.3
 

@@ -2,7 +2,7 @@
   "name": "tnotes-nav",
   "displayName": "TNotes Nav",
   "description": "Local TNotes knowledge-base navigator for VS Code",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "tnotesjs",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -82,7 +82,7 @@
     "package": "npm run typecheck && vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@tnotesjs/kb": "^0.2.1",
+    "@tnotesjs/kb": "^0.4.0",
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.96.0",
     "@vscode/vsce": "^3.2.2",
