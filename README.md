@@ -1,3 +1,7 @@
+> ⚠️ **本仓库已迁移并归档**：代码已合并进 monorepo [tnotesjs/tnotesjs](https://github.com/tnotesjs/tnotesjs) 的 [`apps/nav`](https://github.com/tnotesjs/tnotesjs/tree/main/apps/nav)。后续开发、issues、发布（npm / Releases / Marketplace）均在新仓进行。本仓库仅供查阅历史。
+
+---
+
 # TNotes Nav
 
 本地 TNotes 知识库导航扩展：在 Activity Bar 中浏览知识库列表与只读 TOC，快速打开笔记。
